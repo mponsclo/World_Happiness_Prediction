@@ -1,99 +1,121 @@
-# World Happiness Dataset Analysis
+# World Happiness Report -- Predictive Analysis
 
-Academic projects analyzing the World Happiness Report datasets using multivariate statistical analysis and machine learning techniques.
+<p align="center">
+  <img src="data/WHR_10_logo_violet.png" alt="World Happiness Report" width="250">
+</p>
 
-## About
+> Can we predict a country's happiness score from economic and social indicators?
+> This project applies multivariate statistics and machine learning to the [World Happiness Report](https://worldhappiness.report/), training on 2018 data (152 countries) and testing predictions against 2019.
 
-These projects were developed as final coursework for the Machine Learning and Multivariate Analysis courses of the Master in Innovation and Research in Informatics at UPC (Universitat Politècnica de Catalunya).
+## Key Results
 
-The analysis focuses on the World Happiness Report for 2018 and 2019, applying advanced statistical and machine learning methods to understand patterns in global happiness data.
+| Model | Test RMSE (2019) |
+|---|---|
+| **Neural Network (nn1)** | **0.4818** |
+| Random Forest | 0.4829 |
+| Standard Linear Regression | 0.5231 |
+| Lasso Regression | 0.5244 |
+| Ridge Regression | 0.5267 |
+| Neural Network (nn2) | 0.5437 |
+| Polynomial Regression (deg 6) | 0.5406 |
+| Decision Tree | 0.6484 |
+
+**Key findings:**
+- GDP per capita is the strongest single predictor of happiness (r = 0.80)
+- Countries naturally cluster into 3 groups aligned with development levels
+- Non-linear models (neural nets, random forests) outperform linear methods
+- Generosity is not a significant predictor -- excluded by both stepwise selection and LASSO
+
+## Approach
+
+The analysis follows two incremental phases:
+
+### Phase 1: Multivariate Analysis ([01_multivariate_analysis.Rmd](analysis/01_multivariate_analysis.Rmd))
+Exploratory and unsupervised analysis to understand data structure:
+- **Distribution assessment** -- Shapiro-Wilk tests, Q-Q plots, Mahalanobis distances
+- **Dimensionality reduction** -- PCA reduces 7 variables to 2 components (73% variance)
+- **Varimax rotation** -- Identifies 5 interpretable latent factors
+- **Hierarchical clustering (HCPC)** -- Groups 152 countries into 5 clusters
+- **Tree-based models** -- Decision trees and random forests with grid search tuning
+
+### Phase 2: Machine Learning ([02_machine_learning.Rmd](analysis/02_machine_learning.Rmd))
+Supervised prediction of the 2019 happiness scores:
+- **Clustering** -- K-means and EM clustering confirm K=3 as optimal
+- **Regression** -- Standard, Ridge (L2), Lasso (L1), and Polynomial regression
+- **Tree ensembles** -- Decision trees with post-pruning, random forests
+- **Neural networks** -- Single hidden layer with grid search over size and decay
+- **Model comparison** -- All models evaluated on 2019 test set via RMSE
+
+## Repository Structure
+
+```
+WHA/
+├── README.md
+├── data/
+│   ├── WHR2018.csv              # Training data (156 countries, 7 features + region)
+│   └── WHR2019.csv              # Test data (157 countries, 7 features)
+├── R/
+│   └── utils.R                  # Shared functions (data loading, preprocessing, evaluation)
+├── analysis/
+│   ├── 01_multivariate_analysis.Rmd
+│   └── 02_machine_learning.Rmd
+└── reports/
+    ├── multivariate_analysis_report.pdf
+    └── machine_learning_report.pdf
+```
+
+## How to Run
+
+### Prerequisites
+
+R (>= 4.0) and the following packages:
+
+```r
+install.packages(c(
+  # Core
+  "here", "mice", "dplyr", "tibble", "reshape2", "Metrics",
+  # Visualization
+  "ggplot2", "gplots", "gridExtra", "plotrix", "tableplot",
+  "PerformanceAnalytics", "GGally",
+  # Multivariate analysis
+  "psych", "FactoMineR", "factoextra", "chemometrics", "pracma",
+  # Clustering
+  "cclust", "Rmixmod",
+  # Modeling
+  "glmnet", "MASS", "rpart", "rpart.plot", "randomForest",
+  "caret", "nnet", "neuralnet", "NeuralNetTools",
+  "boot", "rsample", "ROCR", "clusterGeneration"
+))
+```
+
+### Render Reports
+
+```r
+rmarkdown::render("analysis/01_multivariate_analysis.Rmd")
+rmarkdown::render("analysis/02_machine_learning.Rmd")
+```
 
 ## Dataset
 
-The [World Happiness Report](https://worldhappiness.report/) is a landmark survey that ranks 156 countries by happiness scores based on citizen perceptions. The datasets include features such as:
+The [World Happiness Report](https://worldhappiness.report/) ranks 156 countries by perceived happiness.
 
-- **Happiness Score** - Target variable representing perceived happiness
-- **GDP per capita** - Economic prosperity indicator
-- **Social support** - Availability of social networks
-- **Healthy life expectancy** - Health and longevity metrics
-- **Freedom to make life choices** - Personal autonomy measures
-- **Generosity** - Charitable giving patterns
-- **Perceptions of corruption** - Trust in institutions
+| Variable | Description |
+|---|---|
+| **Score** (target) | Subjective well-being (0-10 scale) |
+| GDP per capita | Log PPP-adjusted GDP per capita |
+| Social support | "Can you count on others in trouble?" (0/1 avg) |
+| Healthy life expectancy | WHO-based health/longevity metric |
+| Freedom to make life choices | "Satisfied with your freedom?" (0/1 avg) |
+| Generosity | Residual of charity donations regressed on GDP |
+| Perceptions of corruption | "Is corruption widespread?" (0/1 avg) |
+| Regional Indicator | 10-level categorical (supplementary) |
 
-**Data Sources:**
-- [Kaggle - World Happiness Report](https://www.kaggle.com/unsdsn/world-happiness)
-- [data.world - World Happiness Report 2019](https://data.world/promptcloud/world-happiness-report-2019)
-
-## Project Structure
-
-- `Machine_Learning.Rmd` - Machine learning analysis including PCA, clustering, and predictive modeling
-- `Multivariate_analysis.Rmd` - Multivariate statistical analysis with exploratory data analysis
-- `WHR2018.csv` - World Happiness Report 2018 dataset
-- `WHR2019.csv` - World Happiness Report 2019 dataset
-- `Machine Learning Report.pdf` - Generated report from machine learning analysis
-- `Mva_Report.pdf` - Generated report from multivariate analysis
-
-## Methods Applied
-
-### Multivariate Analysis
-- Principal Component Analysis (PCA)
-- Cluster Analysis (K-means, EM clustering)
-- Exploratory Data Analysis
-- Dimensionality reduction techniques
-
-### Machine Learning
-- Linear regression with regularization
-- Decision trees and random forests
-- Neural networks
-- Cross-validation and model evaluation
-- Performance metrics analysis
-
-## Requirements
-
-The analysis is implemented in R and requires the following packages:
-
-```r
-# Data manipulation and analysis
-library(dplyr)
-library(mice)
-library(psych)
-
-# Visualization
-library(ggplot2)
-library(gplots)
-library(tableplot)
-
-# Multivariate analysis
-library(FactoMineR)
-library(factoextra)
-library(chemometrics)
-
-# Machine learning
-library(caret)
-library(randomForest)
-library(neuralnet)
-library(glmnet)
-```
-
-## Usage
-
-1. Open the R Markdown files in RStudio
-2. Install required packages if not already available
-3. Run the code chunks or knit the entire document to generate reports
-
-```r
-# Render the documents
-rmarkdown::render("Machine_Learning.Rmd")
-rmarkdown::render("Multivariate_analysis.Rmd")
-```
+**Sources:**
+[Kaggle](https://www.kaggle.com/unsdsn/world-happiness) |
+[data.world](https://data.world/promptcloud/world-happiness-report-2019)
 
 ## Authors
 
-- Manuel Breve
-- Diego Quintana  
-- Marcel Pons
+Manuel Breve, Diego Quintana, Marcel Pons
 
-## License
-
-This project is part of academic coursework at UPC.
-
+*Developed as coursework for the Master in Innovation and Research in Informatics at UPC (Universitat Politecnica de Catalunya).*

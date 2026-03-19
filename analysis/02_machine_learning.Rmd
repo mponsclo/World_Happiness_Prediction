@@ -1,0 +1,515 @@
+---
+title: "Machine Learning -- World Happiness Report"
+author: "Manuel Breve, Diego Quintana, Marcel Pons"
+date: "2020"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: flatly
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(here)
+source(here("R", "utils.R"))
+
+library(psych)
+library(gplots)
+library(tableplot)
+library(plotrix)
+library(PerformanceAnalytics)
+library(reshape2)
+library(chemometrics)
+library(pracma)
+library(FactoMineR)
+library(factoextra)
+library(cclust)
+library(Rmixmod)
+library(Matrix)
+library(glmnet)
+library(MASS)
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+library(ROCR)
+library(caret)
+library(neuralnet)
+library(GGally)
+library(boot)
+library(clusterGeneration)
+library(nnet)
+library(NeuralNetTools)
+
+set.seed(42)
+```
+
+## Dataset Description
+
+The World Happiness Report is a landmark survey of the state of global happiness that ranks, through a Happiness Score, 156 countries by how happy their citizens perceive themselves to be.
+
+In this project, we analyze the World Happiness Report for the years 2018 and 2019 through different machine learning techniques. We found that the GDP per capita per country is highly correlated with the Happiness Score, and that we can efficiently cluster them into three groups.
+
+Finally we built different machine learning models, both linear and nonlinear, such as linear and polynomial regression, decision trees, random forests and neural networks in order to predict the 2019 Happiness Score, being neural networks the one with the best performance, i.e, the minimum RMSE value.
+
+The World Happiness Dataset is made of one (1) continuous response variable, six (6) continuous independent variables, and one (1) supplementary categorical variable.
+
+#### Continuous Response Variable
+
++ **Score:** This Happiness Score is a subjective well-being perception based on the survey's answers, which ask people to evaluate different subjects about their life quality on a scale of 0 to 10.
+
+#### Continuous Independent Variables
+
++ **GDP per capita:** in terms of Purchasing Power Parity (PPP) adjusted to constant 2011 international dollars, taken from the World Development Indicators (WDI) released by the World Bank. (Using natural log of GDP per capita, as this form fits the data significantly better than GDP per capita)
++ **Social support:** the national average of the binary response (either 0 or 1) to the Gallup World Poll (GWP) question "If you are in trouble, do you have relatives or friends you can count on to help you whenever you need them, or not?"
++ **Healthy life expectancy at birth:** constructed from the World Health Organization (WHO) and WDI.
++ **Freedom to make life choices:** the national average of binary response to the GWP question "Are you satisfied or dissatisfied with your freedom to choose what you do with your life?"
++ **Generosity:** residual of regressing the national average of GWP responses to the question "Have you donated money to a charity in the past month?" on GDP per capita.
++ **Perceptions of corruption:** the average of binary answers to two GWP questions: "Is corruption widespread throughout the government or not?" and "Is corruption widespread within businesses or not?"
+
+#### Supplementary Categorical Variable
+
++ **Regional Indicator:** Region in the world, made of 10 levels.
+
+## Loading Data
+
+```{r}
+datasets <- load_whr_data()
+train <- datasets$train
+raw_dataset <- train
+test <- datasets$test
+
+summary(train)
+```
+
+```{r echo=FALSE}
+head(train, 3)
+tail(train, 3)
+```
+
+## Pre-processing
+
+Removing Overall.rank (redundant with Score). Two versions of the dataset are kept: one with Regional.Indicator for visualization and one numeric-only for modeling.
+
+```{r}
+PCA_train <- prepare_numeric_data(train, drop_rank = TRUE, drop_region = FALSE)
+train <- prepare_numeric_data(train, drop_rank = TRUE, drop_region = TRUE)
+test <- prepare_numeric_data(test, drop_rank = TRUE, drop_region = TRUE)
+```
+
+### Missing Values
+
+One missing value in Perceptions.of.corruption, imputed using MICE.
+
+```{r imputation, include=FALSE}
+train <- impute_missing(train)
+```
+
+### Outliers
+
+Four outliers identified: Denmark, Singapore, and Rwanda (extreme univariate on Perceptions.of.corruption) and United Arab Emirates (Mahalanobis distance).
+
+```{r outlier-boxplot, echo=FALSE}
+uni_outliers <- ggplot(train, aes(x = factor(1), y = Perceptions.of.corruption)) +
+  xlab("Extreme Univariate Outliers on Perceptions.of.corruption") +
+  geom_boxplot(outlier.colour = "black", outlier.shape = 1, coef = 3) +
+  theme(legend.position = "none") +
+  geom_text(data = train[c(3, 34, 151), ],
+            aes(x = factor(1), y = Perceptions.of.corruption),
+            label = row.names(train[c(3, 34, 151), ]),
+            col = "black", size = 4.5)
+uni_outliers
+```
+
+```{r outlier-mahalanobis, echo=FALSE}
+outliers_maha <- Moutlier(train[-c(3, 34, 151), -8], quantile = 0.999, plot = FALSE)
+densityplot(outliers_maha$md, xlab = "Classical Distances")
+```
+
+```{r remove-outliers, include=FALSE}
+train <- remove_outliers(train)
+raw_dataset <- remove_outliers(raw_dataset)
+```
+
+### Feature Selection
+
+GDP.per.capita has the highest Pearson correlation with Score (r = 0.80). Generosity is the weakest predictor (r = 0.12).
+
+```{r correlation, echo=FALSE}
+chart.Correlation(train, histogram = TRUE)
+```
+
+---
+
+## Visualization and Clustering
+
+### Happiness Score by Region
+
+```{r boxplot-region, echo=FALSE}
+ggplot(raw_dataset, aes(x = Regional.Indicator, y = Score, color = Regional.Indicator)) +
+  geom_boxplot() +
+  ggtitle("Boxplot of the Happiness Score per Regional Indicator") +
+  theme(legend.position = "none") +
+  coord_flip()
+```
+
+### K-means Clustering
+
+```{r kmeans-setup, include=FALSE}
+set.seed(119)
+```
+
+K-means with K=3 shows clear country groupings correlated with GDP and social variables.
+
+```{r kmeans-3, echo=FALSE}
+kmeans.3 <- cclust(as.matrix(train), 3, iter.max = 100, method = "kmeans",
+                   dist = "euclidean")
+
+par(mfrow = c(1, 2))
+plot(train$Score, train$GDP.per.capita, col = (kmeans.3$cluster + 1),
+     xlab = "Happiness Score", ylab = "GDP per capita")
+points(kmeans.3$initcenters, pch = 15)
+points(kmeans.3$centers, pch = 17, col = c(2, 3, 4), cex = 2)
+arrows(kmeans.3$initcenters[, 1], kmeans.3$initcenters[, 2],
+       kmeans.3$centers[, 1], kmeans.3$centers[, 2])
+points(kmeans.3$centers, bg = seq(1:kmeans.3$ncenters) + 1, cex = 2, pch = 21,
+       col = "black")
+
+plot(train$Score, train$Social.support, col = (kmeans.3$cluster + 1),
+     xlab = "Happiness Score", ylab = "Social support")
+points(kmeans.3$initcenters, pch = 15)
+points(kmeans.3$centers, pch = 17, col = c(2, 3, 4), cex = 2)
+arrows(kmeans.3$initcenters[, 1], kmeans.3$initcenters[, 2],
+       kmeans.3$centers[, 1], kmeans.3$centers[, 2])
+points(kmeans.3$centers, bg = seq(1:kmeans.3$ncenters) + 1, cex = 2, pch = 21,
+       col = "black")
+```
+
+### Optimal K via Calinski-Harabasz Index
+
+K=3 yields the highest Calinski-Harabasz index.
+
+```{r calinski, echo=FALSE}
+set.seed(119)
+ch_values <- 2:15
+for (K in 2:15) {
+  kmeans <- cclust(as.matrix(train), K, iter.max = 100, method = "kmeans",
+                   dist = "euclidean")
+  ch_values[K - 1] <- clustIndex(kmeans, train, index = "calinski")
+}
+plot(2:15, ch_values, type = "b", ylab = "Calinski index", xlab = "K")
+```
+
+### PCA for Dimensionality Reduction
+
+Reducing 7 variables to 2 principal components that capture ~73% of the variance.
+
+```{r pca, echo=FALSE}
+res.pca <- PCA(train, quanti.sup = 1, scale.unit = TRUE, graph = FALSE)
+res.pca$eig
+
+significant_dimensions <- 2
+new_train <- data.frame(res.pca$ind$coord[, 1:significant_dimensions])
+```
+
+```{r pca-head, echo=FALSE}
+head(new_train, 3)
+```
+
+### K-means on PCA Components
+
+```{r kmeans-pca, echo=FALSE}
+set.seed(119)
+ch_values <- 2:15
+for (K in 2:15) {
+  kmeans <- cclust(as.matrix(new_train), K, iter.max = 100, method = "kmeans",
+                   dist = "euclidean")
+  ch_values[K - 1] <- clustIndex(kmeans, new_train, index = "calinski")
+}
+plot(2:15, ch_values, type = "b", ylab = "Calinski index", xlab = "K")
+```
+
+### EM Clustering
+
+EM clustering on the 2-component PCA space also selects K=3 as optimal.
+
+```{r em-clustering, echo=FALSE}
+set.seed(119)
+EM <- mixmodCluster(new_train, nbCluster = 2:10)
+summary(EM)
+
+set.seed(119)
+mixture_model <- mixmodCluster(new_train, 3)
+plotCluster(mixture_model["bestResult"], new_train)
+hist(mixture_model)
+```
+
+---
+
+## Machine Learning Modeling
+
+Models are trained on 2018 data and evaluated on the 2019 test set. The best model is selected by minimizing RMSE on the test predictions.
+
+### A. Linear Regression
+
+#### A.1 Standard Linear Regression
+
+Backward stepwise feature selection removes Generosity (lowest AIC contribution, weakest correlation with Score).
+
+```{r standard-lr, echo=FALSE}
+model1 <- lm(Score ~ ., data = train)
+(model1.sel <- step(model1))
+```
+
+#### A.2 Ridge Regression
+
+L2-regularized regression. Optimal lambda = 17.3, selected via generalized cross-validation.
+
+```{r ridge, echo=FALSE}
+model.ridge <- lm.ridge(Score ~ ., data = train, lambda = seq(0, 34, 0.1))
+plot(seq(0, 34, 0.1), model.ridge$GCV, main = "GCV of Ridge Regression",
+     type = "l", xlab = expression(lambda), ylab = "GCV")
+lambda.ridge <- seq(0, 34, 0.1)[which.min(model.ridge$GCV)]
+abline(v = lambda.ridge, lty = 2)
+```
+
+#### A.3 LASSO Regression
+
+L1-regularized regression. The model excludes Generosity automatically, confirming stepwise results. Optimal lambda = 0.02126.
+
+```{r lasso, echo=FALSE}
+set.seed(119)
+x_vars <- model.matrix(Score ~ ., train)[, -1]
+y_var <- train$Score
+x_test <- model.matrix(Score ~ ., test)[, -1]
+model.lasso <- cv.glmnet(x_vars, y_var, nfolds = 10)
+coef(model.lasso)
+plot(model.lasso)
+lambda.lasso <- model.lasso$lambda.min
+```
+
+#### A.4 Polynomial Regression
+
+Best degree found via 10-fold CV: degree 6.
+
+```{r polynomial, echo=FALSE}
+set.seed(119)
+mse <- rep(NA, 10)
+for (i in 1:10) {
+  fit <- glm(Score ~ poly(GDP.per.capita + Social.support +
+                           Healthy.life.expectancy +
+                           Freedom.to.make.life.choices +
+                           Generosity + Perceptions.of.corruption),
+             data = train)
+  mse[i] <- cv.glm(train, fit, K = 10)$delta[1]
+}
+plot(1:10, mse, xlab = "Degree", ylab = "Validation MSE", type = "l")
+d.min <- which.min(mse)
+points(d.min, mse[d.min], col = "orangered2", cex = 1, pch = 20)
+abline(v = d.min, lty = 2)
+```
+
+#### A.5 Regression Model Comparison
+
+10x10-fold cross-validation comparing all regression models via NMSE.
+
+```{r regression-cv, echo=FALSE}
+set.seed(119)
+data <- train
+K <- 10; TIMES <- 10
+
+res <- replicate(TIMES, {
+  data <- data[sample(nrow(data)), ]
+  folds <- cut(1:nrow(data), breaks = K, labels = FALSE)
+  sse.standard <- sse.ridge <- sse.lasso <- sse.poly <- 0
+
+  for (i in 1:K) {
+    valid.indexes <- which(folds == i, arr.ind = TRUE)
+    valid.data <- data[valid.indexes, ]
+    train.data <- data[-valid.indexes, ]
+
+    # Standard LR (without Generosity)
+    model.standard <- lm(Score ~ . - Generosity, data = train.data)
+    beta.standard <- coef(model.standard)
+    preds.standard <- beta.standard[1] +
+      as.matrix(valid.data[, c(2:5, 7)]) %*% beta.standard[2:6]
+    sse.standard <- sse.standard +
+      crossprod(valid.data[, "Score"] - preds.standard)
+
+    # Ridge
+    model.ridgereg <- lm.ridge(Score ~ ., data = train.data, lambda = lambda.ridge)
+    beta.ridgereg <- coef(model.ridgereg)
+    preds.ridgereg <- beta.ridgereg[1] +
+      as.matrix(valid.data[, c(2:7)]) %*% beta.ridgereg[2:7]
+    sse.ridge <- sse.ridge +
+      crossprod(valid.data[, "Score"] - preds.ridgereg)
+
+    # LASSO
+    model.lasso <- glmnet(as.matrix(train.data[, 2:7]),
+                          as.numeric(train.data[, "Score"]),
+                          lambda = lambda.lasso)
+    preds.lasso <- predict(model.lasso, newx = as.matrix(valid.data[, 2:7]),
+                           s = lambda.lasso)
+    sse.lasso <- sse.lasso +
+      crossprod(valid.data[, "Score"] - preds.lasso)
+
+    # Polynomial (degree 5)
+    model.poly <- glm(Score ~ poly(GDP.per.capita + Social.support +
+                                     Healthy.life.expectancy +
+                                     Freedom.to.make.life.choices +
+                                     Generosity + Perceptions.of.corruption,
+                                   5, raw = TRUE),
+                      data = train.data, family = gaussian)
+    preds.poly <- predict(model.poly, newdata = valid.data[, 2:7])
+    sse.poly <- sse.poly +
+      crossprod(valid.data[, "Score"] - preds.poly)
+  }
+  c(sse.standard, sse.ridge, sse.lasso, sse.poly)
+})
+
+normalization <- (nrow(train) - 1) * var(train$Score)
+nmse.train <- rowMeans(res) / normalization
+errors <- as.data.frame(nmse.train)
+rownames(errors) <- c("Standard", "Ridge", "Lasso", "Poly")
+colnames(errors) <- "NMSE train"
+errors
+```
+
+Standard linear regression achieves the lowest NMSE on cross-validation.
+
+### B. Decision Trees and Random Forests
+
+```{r tree-setup, include=FALSE}
+set.seed(119)
+```
+
+```{r decision-tree, include=FALSE}
+df.tree <- rpart(Score ~ ., data = train, method = "anova",
+                 control = rpart.control(cp = 0.001, xval = 10))
+table_tree <- as.data.frame(df.tree$cptable)
+min_error_tree <- which.min(table_tree$xerror)
+alpha <- table_tree$CP[min_error_tree]
+optimum_tree <- prune(df.tree, cp = alpha)
+```
+
+```{r random-forest, include=FALSE}
+rf <- randomForest(Score ~ ., data = train, type = "regression", importance = TRUE)
+```
+
+Predicted vs. actual for decision trees and random forests on the 2019 test set.
+
+```{r tree-plots, echo=FALSE}
+dt_preds <- predict(optimum_tree, newdata = test, type = "vector")
+rf_preds <- predict(rf, newdata = test)
+
+p1 <- plot_predictions(test$Score, dt_preds, "Decision Tree")
+p2 <- plot_predictions(test$Score, rf_preds, "Random Forest")
+grid.arrange(p1, p2, nrow = 1)
+```
+
+### C. Neural Networks
+
+Two configurations tested with 10-fold repeated CV and pre-scaled data:
+
+- **nn1:** Grid search over hidden layer sizes (1-10), no regularization. Optimal: size = 2.
+- **nn2:** Grid search over decay values (L2 regularization), fixed size = 2.
+
+```{r nn-setup, include=FALSE}
+set.seed(75)
+```
+
+```{r nn1, include=FALSE}
+sizes <- seq(1, 10, by = 1)
+trc <- trainControl(method = "repeatedcv", number = 10, repeats = 10)
+
+nn1 <- train(Score ~ ., data = train,
+             method = "nnet", maxit = 500, trace = FALSE,
+             tuneGrid = expand.grid(.size = sizes, .decay = 0),
+             preProcess = c("scale"), trControl = trc, linout = TRUE)
+```
+
+Best neural network configuration:
+
+```{r nn1-plot, echo=FALSE}
+nn1
+plotnet(nn1)
+```
+
+```{r nn2, include=FALSE}
+decays <- 10^seq(-2, 0, by = 0.2)
+nn2 <- train(Score ~ ., data = train,
+             method = "nnet", maxit = 500, trace = FALSE,
+             tuneGrid = expand.grid(.size = 2, .decay = decays),
+             preProcess = c("scale"), trControl = trc, linout = TRUE)
+```
+
+---
+
+## Final Model Comparison
+
+All models evaluated on the 2019 test set using RMSE.
+
+```{r final-evaluation, echo=FALSE}
+# Build final models and generate predictions
+model.standard <- lm(Score ~ . - Generosity, data = train)
+beta.standard <- coef(model.standard)
+preds.standard <- beta.standard[1] +
+  as.matrix(test[, c(2:5, 7)]) %*% beta.standard[2:6]
+
+model.ridgereg <- lm.ridge(Score ~ ., data = train, lambda = lambda.ridge)
+beta.ridgereg <- coef(model.ridgereg)
+preds.ridgereg <- beta.ridgereg[1] +
+  as.matrix(test[, c(2:7)]) %*% beta.ridgereg[2:7]
+
+preds.lasso <- predict(model.lasso, newx = as.matrix(test[, 2:7]), s = lambda.lasso)
+
+model.poly <- glm(Score ~ poly(GDP.per.capita + Social.support +
+                                 Healthy.life.expectancy +
+                                 Freedom.to.make.life.choices +
+                                 Generosity + Perceptions.of.corruption,
+                               6, raw = TRUE),
+                  data = train, family = gaussian)
+preds.poly <- predict(model.poly, newdata = test[, 2:7])
+
+preds.dt <- predict(optimum_tree, newdata = test, type = "vector")
+preds.rf <- predict(rf, newdata = test)
+preds.nn1 <- predict(nn1, newdata = test)
+preds.nn2 <- predict(nn2, newdata = test)
+
+# Collect all predictions in a named list
+all_models <- list(
+  list(name = "Standard LR", preds = preds.standard),
+  list(name = "Ridge",        preds = preds.ridgereg),
+  list(name = "Lasso",        preds = preds.lasso),
+  list(name = "Polynomial",   preds = preds.poly),
+  list(name = "Decision Tree", preds = preds.dt),
+  list(name = "Random Forest", preds = preds.rf),
+  list(name = "Neural Net (nn1)", preds = preds.nn1),
+  list(name = "Neural Net (nn2)", preds = preds.nn2)
+)
+
+# RMSE comparison table
+results <- do.call(rbind, lapply(all_models, function(m) {
+  evaluate_predictions(test$Score, m$preds, m$name)
+}))
+results[order(results$RMSE), ]
+```
+
+### Actual vs. Predicted Plots
+
+```{r final-plots, echo=FALSE, fig.width=14, fig.height=7}
+plots <- lapply(all_models, function(m) {
+  plot_predictions(test$Score, m$preds, m$name)
+})
+grid.arrange(grobs = plots, nrow = 2, ncol = 4)
+```
+
+---
+
+## Conclusions
+
+We have studied the World Happiness Report through different Machine Learning techniques. It is interesting to analyze the countries of the world through such relevant variables as GDP.per.capita, which turned out to be one of the most correlated variables with the national Happiness Score.
+
+We can also visualize and cluster the countries in different groups. Three clusters of countries were clearly defined and segmented by some correlated variables as their GDP.per.capita.
+
+Regarding the machine learning methods we have observed the power and flexibility of non-linear models such as neural networks and random forests. While neural networks are often excellent choices as a model, it is still important to know how they work and be mindful that different runs can produce different results. Random forests are less computationally expensive and more stable. Our dataset was relatively small (~152 countries), and neural networks would require more data to build a truly robust model.
